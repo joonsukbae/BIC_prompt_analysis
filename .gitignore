@@ -1,1 +1,8 @@
 *.root
+# Calibration/analysis macros to ignore
+cali_IntADC.C
+calibration_constants.txt
+draw_IntADC_S.C
+eventselection_bic
+macro.cc
+make_sim_map.C

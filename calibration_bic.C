@@ -33,11 +33,12 @@ struct pair_hash {
 
 using namespace std;
 
-void calibration_bic(const char *dataFile = "Waveform_sample.root",
-                     const char *simFile = "3x8_3GeV_CERN_hist.root",
+void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
+                     const char *simFile = "Sim/3x8_3GeV_CERN_hist.root",
                      const double beamEnergyGeV = 3.0,
                      bool useTriggerTime = true,
-                     bool useTriggerNumber = false) {
+                     bool useTriggerNumber = false,
+                     int adcThreshold = 0) {
   // --- Data loading ---
   TFile *fData = TFile::Open(dataFile, "READ");
   if (!fData || fData->IsZombie()) {
@@ -171,6 +172,9 @@ void calibration_bic(const char *dataFile = "Waveform_sample.root",
       double sum = 0;
       for (int k = start; k < end; ++k)
         sum += waveform_total->at(k);
+      // only integrate if total ADC exceeds threshold
+      if (sum < adcThreshold)
+        continue;
       eventSumLR[key] += sum;
     }
     // After summing, fill histograms and accumulate sums/counts
@@ -235,11 +239,13 @@ void calibration_bic(const char *dataFile = "Waveform_sample.root",
   // Prepare output for calibration constants
   TTree *tCalib = new TTree("Calibration", "Per-geom calibration constants");
   int calibGeom;
+  int calibSide;
   double calibValue;
   tCalib->Branch("GeomID", &calibGeom, "GeomID/I");
+  tCalib->Branch("Side",   &calibSide, "Side/I");
   tCalib->Branch("CalibConst", &calibValue, "CalibConst/D");
 
-  std::ofstream csvOut("calibration_constants.txt");
+  std::ofstream csvOut("calibration_constant_output/calibration_constants.txt");
   csvOut << "#GeomID,Side,CalibConst\n";
 
   // --- estimate & print calibration constants ---
@@ -260,7 +266,8 @@ void calibration_bic(const char *dataFile = "Waveform_sample.root",
     string label = Form("M%d%c", mod, side);
     printf("  %2d     %-6s  %10.3f  %10.3f (%.1f%%)  %8.5f\n",
            geom, label.c_str(), md, ms, pct, C);
-    calibGeom = geom*10 + lr; // or use a unique key scheme
+    calibGeom  = geom;
+    calibSide  = lr;
     calibValue = C;
     tCalib->Fill();
     csvOut << geom << "," << (lr ? 'R' : 'L') << "," << C << "\n";
@@ -283,7 +290,9 @@ void calibration_bic(const char *dataFile = "Waveform_sample.root",
          totalSimE, totalPct, beamEnergyGeV);
 
   // --- Write out distributions ---
-  TFile fout("calibration_bic_output.root", "RECREATE");
+  // Create output directory if it doesn't exist
+  system("mkdir -p calibration_constant_output");
+  TFile fout("calibration_constant_output/calibration_bic_output.root", "RECREATE");
   for (auto &kv : hDataDistLR) {
     kv.second->Write();
   }
@@ -364,9 +373,9 @@ void calibration_bic(const char *dataFile = "Waveform_sample.root",
     tex.SetTextColor(kBlack);
     tex.DrawLatex(0.15, 0.52, Form("C_L=%.2f, C_R=%.2f", CL, CR));
   }
-  cQA->SaveAs("calibration_QA.png");
+  cQA->SaveAs("calibration_constant_output/calibration_QA.png");
   // also write canvas into the output root file
-  TFile fout2("calibration_bic_output.root", "UPDATE");
+  TFile fout2("calibration_constant_output/calibration_bic_output.root", "UPDATE");
   cQA->Write();
   fout2.Close();
 }

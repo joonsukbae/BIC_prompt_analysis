@@ -24,6 +24,12 @@
 #include <TLatex.h>
 #include <algorithm>
 #include <vector>
+#include <regex>
+#include <string>
+using std::string;
+
+#include <cstring>
+#include <cstdio>
 
 struct pair_hash {
   size_t operator()(const std::pair<int, int> &p) const noexcept {
@@ -32,6 +38,44 @@ struct pair_hash {
 };
 
 using namespace std;
+
+// input 파일명에서 run number 또는 고유 문자열 추출 (C 스타일, char* 반환)
+const char* extractRunTag(const char* dataFile) {
+  static char buf[128];
+  // 파일명만 추출
+  const char* fname = strrchr(dataFile, '/');
+  fname = (fname ? fname + 1 : dataFile);
+  // Run_60184_Waveform.root → Run60184
+  const char* runptr = strstr(fname, "Run_");
+  if (runptr) {
+    int runnum = 0;
+    if (sscanf(runptr, "Run_%d", &runnum) == 1) {
+      snprintf(buf, sizeof(buf), "Run%d", runnum);
+      return buf;
+    }
+  }
+  // Waveform_sample.root → Waveform_sample
+  const char* wptr = strstr(fname, "_Waveform");
+  if (wptr && wptr > fname) {
+    size_t len = wptr - fname;
+    if (len > sizeof(buf)-1) len = sizeof(buf)-1;
+    strncpy(buf, fname, len);
+    buf[len] = '\0';
+    return buf;
+  }
+  // 확장자 제거
+  const char* dot = strrchr(fname, '.');
+  if (dot && dot > fname) {
+    size_t len = dot - fname;
+    if (len > sizeof(buf)-1) len = sizeof(buf)-1;
+    strncpy(buf, fname, len);
+    buf[len] = '\0';
+    return buf;
+  }
+  strncpy(buf, fname, sizeof(buf)-1);
+  buf[sizeof(buf)-1] = '\0';
+  return buf;
+}
 
 void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
                      const char *simFile = "Sim/3x8_3GeV_CERN_hist.root",
@@ -207,11 +251,11 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     }
     // Clone entire sim histogram for QA overlay
     TH1D *hCloned = (TH1D*)hOrig->Clone(Form("hSim_G%d", geom));
-    hCloned->Scale(0.5); // 0.5 is for unseparated L/R in sim
+    // hCloned->Scale(0.5); // Remove 0.5 scaling - use full module energy
     hCloned->SetDirectory(0);
     hSimDist[geom] = hCloned;
     // Store mean value for calibration calculation
-    double meanVal = hOrig->GetMean() * 0.5; // 0.5 is for unseparated L/R in sim
+    double meanVal = hOrig->GetMean(); // Use full module energy, no 0.5 scaling
     sum_sim[geom] = meanVal;
     count_sim[geom] = 1;
   }
@@ -245,27 +289,36 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   tCalib->Branch("Side",   &calibSide, "Side/I");
   tCalib->Branch("CalibConst", &calibValue, "CalibConst/D");
 
-  std::ofstream csvOut("calibration_constant_output/calibration_constants.txt");
+  string runTag = extractRunTag(dataFile);
+  string outTxt  = "calibration_constant_output/calibration_constants_" + runTag + ".txt";
+  string outRoot = "calibration_constant_output/calibration_bic_output_" + runTag + ".root";
+  string outQA   = "calibration_constant_output/calibration_QA_" + runTag + ".png";
+
+  std::ofstream csvOut(outTxt);
   csvOut << "#GeomID,Side,CalibConst\n";
 
   // --- estimate & print calibration constants ---
-  cout << "\nGeomID Module  mean_data  mean_sim(MeV, %)  CalibC(sim/data)" << endl;
+  cout << "\nGeomID Module  mean_data(fit)  mean_sim(fit,MeV, %)  CalibC(sim/data)" << endl;
   // Write 48 calibration constants
   for (auto &kv : sum_dataLR) {
     auto key = kv.first;
     int geom = key.first;
     int lr   = key.second;
+    
+    // Simple mean calculation for calibration constants (no fitting needed)
     double md = sum_dataLR[key] / count_dataLR[key];
-    double ms = (sum_sim.count(geom) ? sum_sim[geom] : 0.0);
-    // percent of half-beam-energy
-    double pct = (beamEnergyGeV > 0) ? (ms / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0;
-    double C  = (md != 0.0 ? (ms / md) : 0.0);
+    double ms_full = (sum_sim.count(geom) ? sum_sim[geom] : 0.0);
+    
+    double ms_half = ms_full * 0.5; // Half for individual L/R channels
+    // percent of half-beam-energy (for individual L/R channels)
+    double pct = (beamEnergyGeV > 0) ? (ms_half / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0;
+    double C  = (md != 0.0 ? (ms_half / md) : 0.0);
     // Determine actual module label
     int mod = geomLRToMod[{geom, lr}];
     char side = (lr ? 'R' : 'L');
     string label = Form("M%d%c", mod, side);
     printf("  %2d     %-6s  %10.3f  %10.3f (%.1f%%)  %8.5f\n",
-           geom, label.c_str(), md, ms, pct, C);
+           geom, label.c_str(), md, ms_half, pct, C);
     calibGeom  = geom;
     calibSide  = lr;
     calibValue = C;
@@ -284,7 +337,7 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   double totalPct = 0.0;
   if (beamEnergyGeV > 0) {
     double beamMeV = beamEnergyGeV * 1000.0;
-    totalPct = (totalSimE / beamMeV / 2) * 100.0;
+    totalPct = (totalSimE / beamMeV) * 100.0;  // /2 제거
   }
   printf("Total sim Edep: %.1f MeV = %.2f%% of beam energy (%.1f GeV)\n",
          totalSimE, totalPct, beamEnergyGeV);
@@ -292,7 +345,7 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   // --- Write out distributions ---
   // Create output directory if it doesn't exist
   system("mkdir -p calibration_constant_output");
-  TFile fout("calibration_constant_output/calibration_bic_output.root", "RECREATE");
+  TFile fout(outRoot.c_str(), "RECREATE");
   for (auto &kv : hDataDistLR) {
     kv.second->Write();
   }
@@ -314,18 +367,57 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   TCanvas *cQA = new TCanvas("cQA", "Calibration QA per Module", 2000, 700);
   cQA->Divide(8, 3); // 8 columns, 3 rows for 24 modules
   // Draw per-module summary: Data L, Data R, Sim mean, CalibConst L/R
+  // QA 플롯 그리기 전에, 모든 데이터 히스토그램의 최대 bin 값 찾기
+  double globalMax = 0;
+  for (auto &kv : hDataDistLR) {
+    double m = kv.second->GetMaximum();
+    if (m > globalMax) globalMax = m;
+  }
+  // (시뮬레이션도 같이 그릴 거면 아래도 포함)
+  // for (auto &kv : hSimDist) {
+  //   double m = kv.second->GetMaximum();
+  //   if (m > globalMax) globalMax = m;
+  // }
+  // 모든 데이터 히스토그램을 이벤트 수로 정규화
+  for (auto &kv : hDataDistLR) {
+    if (kv.second->GetEntries() > 0)
+      kv.second->Scale(1.0 / kv.second->GetEntries());
+  }
+  // (시뮬레이션도 동일하게)
+  for (auto &kv : hSimDist) {
+    if (kv.second->GetEntries() > 0)
+      kv.second->Scale(1.0 / kv.second->GetEntries());
+  }
+
+  // 2. 정규화된 히스토그램의 최대값(globalMax) 재계산
+  globalMax = 0;
+  for (auto &kv : hDataDistLR) {
+    double m = kv.second->GetMaximum();
+    if (m > globalMax) globalMax = m;
+  }
+  // (시뮬레이션도 포함하려면 아래도)
+  // for (auto &kv : hSimDist) {
+  //   double m = kv.second->GetMaximum();
+  //   if (m > globalMax) globalMax = m;
+  // }
+
+  // 3. y축 최대값 고정
   for (size_t idx = 0; idx < qaOrder.size(); ++idx) {
     int geom = qaOrder[idx];
     cQA->cd(idx + 1);
-    // Draw data L
     auto keyL = make_pair(geom, 0);
+    auto keyR = make_pair(geom, 1);
+
+    if (hDataDistLR.count(keyL)) hDataDistLR[keyL]->SetMaximum(globalMax * 1.1);
+    if (hDataDistLR.count(keyR)) hDataDistLR[keyR]->SetMaximum(globalMax * 1.1);
+
+    // Draw data L
     if (hDataDistLR.count(keyL)) {
       hDataDistLR[keyL]->SetLineColor(kBlue);
       // hDataDistLR[keyL]->GetXaxis()->SetRangeUser(0,200);
       hDataDistLR[keyL]->Draw();
     }
     // Draw data R
-    auto keyR = make_pair(geom, 1);
     if (hDataDistLR.count(keyR)) {
       hDataDistLR[keyR]->SetLineColor(kGreen+2);
       // hDataDistLR[keyR]->GetXaxis()->SetRangeUser(0,200);
@@ -336,17 +428,18 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     //   hSimDist[geom]->SetLineColor(kRed);
     //   hSimDist[geom]->Draw("SAME");
     // }
-    // Compute means and calibration constants
+    // Compute simple means and calibration constants
     double meanL = (count_dataLR[keyL]>0 ? sum_dataLR[keyL]/count_dataLR[keyL] : 0);
     double meanR = (count_dataLR[keyR]>0 ? sum_dataLR[keyR]/count_dataLR[keyR] : 0);
-    double meanS = (count_sim[geom]>0 ? sum_sim[geom]/count_sim[geom] : 0);
-    double CL = (meanL!=0 ? meanS/meanL : 0);
-    double CR = (meanR!=0 ? meanS/meanR : 0);
+    double meanS_full = (count_sim[geom]>0 ? sum_sim[geom]/count_sim[geom] : 0);
+    double meanS_half = meanS_full * 0.5; // Half for individual L/R channels
+    double CL = (meanL!=0 ? meanS_half/meanL : 0);
+    double CR = (meanR!=0 ? meanS_half/meanR : 0);
     // Compute standard deviations for L, R, Sim
     double stdL = 0.0, stdR = 0.0, stdS = 0.0;
     if (hDataDistLR.count(keyL)) stdL = hDataDistLR[keyL]->GetMeanError();
     if (hDataDistLR.count(keyR)) stdR = hDataDistLR[keyR]->GetMeanError();
-    if (hSimDist.count(geom))   stdS = hSimDist[geom]->GetMeanError() * 0.5;
+    if (hSimDist.count(geom))   stdS = hSimDist[geom]->GetMeanError(); // Remove 0.5 scaling
     // Annotate
     TLatex tex;
     tex.SetNDC();
@@ -366,16 +459,16 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     tex.DrawLatex(0.15, 0.68, Form("µ_R=%.2g #pm %.2g", meanR, stdR));
     // Sim mean ± stddev and percentage of half-beam-energy
     tex.SetTextColor(kRed);
-    double pctS = (beamEnergyGeV > 0) ? (meanS / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0;
+    double pctS = (beamEnergyGeV > 0) ? (meanS_half / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0; // Half for individual L/R
     tex.DrawLatex(0.15, 0.60,
-      Form("µ_Sim=%.2g #pm %.2g MeV (%.2g%%)", meanS, stdS, pctS));
+      Form("µ_Sim=%.2g #pm %.2g MeV (%.2g%%)", meanS_half, stdS, pctS));
     // Calibration constants
     tex.SetTextColor(kBlack);
     tex.DrawLatex(0.15, 0.52, Form("C_L=%.2f, C_R=%.2f", CL, CR));
   }
-  cQA->SaveAs("calibration_constant_output/calibration_QA.png");
+  cQA->SaveAs(outQA.c_str());
   // also write canvas into the output root file
-  TFile fout2("calibration_constant_output/calibration_bic_output.root", "UPDATE");
+  TFile fout2(outRoot.c_str(), "UPDATE");
   cQA->Write();
   fout2.Close();
 }

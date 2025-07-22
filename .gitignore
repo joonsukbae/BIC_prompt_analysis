@@ -1,8 +1,11 @@
 *.root
 # Calibration/analysis macros to ignore
-cali_IntADC.C
-calibration_constants.txt
-draw_IntADC_S.C
-eventselection_bic
-macro.cc
-make_sim_map.C
+eventselection_bic.C
+Data/*
+!Data/
+Sim/*
+!Sim/
+energy_calibration_output/*
+!energy_calibration_output/
+calibration_constant_output/*
+!calibration_constant_output/

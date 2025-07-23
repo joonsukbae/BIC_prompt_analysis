@@ -1,25 +1,17 @@
 // calibration_bic.C
+// Macro: calculate calibration constants by comparing data with simulation
 // Usage:
-//   root -l
-//   root[0] .L calibration_bic.C
-//   root[1]
-//   calibration_bic("Run_60184_Waveform.root","3x5_5GeV_result_new.root",
-//   "data_map.txt", "sim_map.txt", true, false);
+//   root -l -q 'calibration_bic.C("Data/Run_60264_Waveform.root", "Sim/4x8_5GeV_3rd_result_new.root", 3.0, 2)'
 
 #include "TIterator.h"
 #include "TKey.h"
-#include "caloMap.h"
+#include "caloMap_old.h"
 #include <TFile.h>
 #include <TH1.h>
 #include <TH1D.h>
 #include <TTree.h>
 #include <unordered_map>
-// #include <fstream>
 #include <iostream>
-// #include <map>
-// #include <sstream>
-// #include <unordered_map>
-// #include <utility>
 #include <TCanvas.h>
 #include <TLatex.h>
 #include <algorithm>
@@ -39,13 +31,12 @@ struct pair_hash {
 
 using namespace std;
 
-// input 파일명에서 run number 또는 고유 문자열 추출 (C 스타일, char* 반환)
+// Extract run tag from filename
 const char* extractRunTag(const char* dataFile) {
   static char buf[128];
-  // 파일명만 추출
   const char* fname = strrchr(dataFile, '/');
   fname = (fname ? fname + 1 : dataFile);
-  // Run_60184_Waveform.root → Run60184
+  
   const char* runptr = strstr(fname, "Run_");
   if (runptr) {
     int runnum = 0;
@@ -54,7 +45,7 @@ const char* extractRunTag(const char* dataFile) {
       return buf;
     }
   }
-  // Waveform_sample.root → Waveform_sample
+  
   const char* wptr = strstr(fname, "_Waveform");
   if (wptr && wptr > fname) {
     size_t len = wptr - fname;
@@ -63,7 +54,7 @@ const char* extractRunTag(const char* dataFile) {
     buf[len] = '\0';
     return buf;
   }
-  // 확장자 제거
+  
   const char* dot = strrchr(fname, '.');
   if (dot && dot > fname) {
     size_t len = dot - fname;
@@ -78,17 +69,21 @@ const char* extractRunTag(const char* dataFile) {
 }
 
 void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
-                     const char *simFile = "Sim/3x8_3GeV_CERN_hist.root",
+                     const char *simFile = "Sim/4x8_5GeV_3rd_result_new.root",
                      const double beamEnergyGeV = 3.0,
+                     int targetLayer = 2,
+                     int adcThreshold = 0,
                      bool useTriggerTime = true,
                      bool useTriggerNumber = false,
-                     int adcThreshold = 0) {
+                     double peakThreshold = 0.0,
+                     double xMax = 100000.0) {
   // --- Data loading ---
   TFile *fData = TFile::Open(dataFile, "READ");
   if (!fData || fData->IsZombie()) {
     cerr << "Error: cannot open data file " << dataFile << endl;
     return;
   }
+  
   // Auto-detect TTree in data file
   fData->ls();
   TTree *tData = nullptr;
@@ -114,37 +109,35 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   std::vector<int> *waveform_idx = nullptr;
   std::vector<int> *MID = nullptr;
   std::vector<int> *ch = nullptr;
+  std::vector<int> *data_length = nullptr;
   tData->SetBranchAddress("waveform_total", &waveform_total);
   tData->SetBranchAddress("waveform_idx", &waveform_idx);
   tData->SetBranchAddress("MID", &MID);
   tData->SetBranchAddress("ch", &ch);
+  tData->SetBranchAddress("data_length", &data_length);
   std::vector<long long> *trigger_time = nullptr;
   std::vector<int> *trigger_number = nullptr;
   tData->SetBranchAddress("trigger_time", &trigger_time);
   tData->SetBranchAddress("trigger_number", &trigger_number);
 
-  // --- Read mapping files ---
-
   // --- Prepare per-geom histograms for data and simulation ---
   std::map<std::pair<int,int>, TH1D*> hDataDistLR; // (geomID, lr)
   std::map<int, TH1D*> hSimDist; // sim remains per geom
-  const int nBins = 200;
-  const double maxADC = 1e6;
-  // Allocate histograms after reading mapping files
-  // 1) Data mapping from caloMap.h
-  auto dataChMap = GetCaloChMap();
-  cout << "Loaded " << dataChMap.size()
-       << " channel-to-geom entries from caloMap.h" << endl;
+  
+  // Data mapping from caloMap_old.h
+  auto dataChMap = GetCaloChMapOld();
+  cout << "Loaded " << dataChMap.size() << " channel-to-geom entries from caloMap.h" << endl;
+  
   // Build module → GeomID and module labels dynamically
   unordered_map<int, int> moduleToGeom;
   unordered_map<int, string> geomLabel;
   vector<int> uniqueGeoms;
   for (auto &kv : dataChMap) {
     int lr = kv.second[0];            // 0=L, 1=R
-    int mod = kv.second[1];           // actual module number
+    int mod = kv.second[1];           // actual module number (GeomID for old mapping)
     int col = kv.second[2];           // 0..7
     int layer = kv.second[3];         // 0..7
-    int geomID = layer * 8 + col + 1; // 1..24
+    int geomID = mod;                 // For old mapping, mod is already the GeomID
     moduleToGeom[mod] = geomID;
     // label "M<mod><L/R>"
     geomLabel[geomID] = Form("M%d%c", mod, (lr == 0 ? 'L' : 'R'));
@@ -157,17 +150,16 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   // Allocate one histogram per (geom, L/R)
   for (auto &kv : dataChMap) {
     int lr   = kv.second[0];  // 0=L, 1=R
-    int mod  = kv.second[1];
-    int geom = moduleToGeom[mod];
+    int mod  = kv.second[1];  // GeomID for old mapping
+    int geom = mod;            // Use mod directly as GeomID
     auto key = std::make_pair(geom, lr);
     if (!hDataDistLR.count(key)) {
       std::string name = Form("hData_G%d_%c", geom, lr ? 'R' : 'L');
       std::string title = Form("Data INT ADC Geom %d %c;INT ADC;Events", geom, lr ? 'R' : 'L');
-      hDataDistLR[key] = new TH1D(name.c_str(), title.c_str(), nBins, 0, maxADC);
+      hDataDistLR[key] = new TH1D(name.c_str(), title.c_str(), 100, 0, 100000);
       hDataDistLR[key]->SetDirectory(0);
     }
   }
-  // Simulation histos allocated later as before
 
   // Module Accumulation (sum, count) for data per (geom, lr)
   std::unordered_map<std::pair<int,int>, double, pair_hash> sum_dataLR;
@@ -177,6 +169,10 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   cout << "Data entries: " << nD << endl;
   for (Long64_t i = 0; i < nD; ++i) {
     tData->GetEntry(i);
+    
+    // data_length.size()=92가 아닌 경우 이벤트 스킵 (92개 채널이 모두 켜진 이벤트만)
+    if (data_length->size() != 92) continue;
+    
     long long evtTime =
         (useTriggerTime && trigger_time && !trigger_time->empty())
             ? trigger_time->at(0)
@@ -185,11 +181,6 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
         (useTriggerNumber && trigger_number && !trigger_number->empty())
             ? trigger_number->at(0)
             : 0;
-
-    // ←── HERE ──► Apply your event filter
-    // e.g., if (evtTime < timeMin || evtTime > timeMax) continue;
-    //       if (evtNum != desiredTrigger) continue;
-    // … rest of loop: accumulate sums, fill histos …
 
     // Sum per event per (geom, lr)
     std::unordered_map<std::pair<int,int>, double, pair_hash> eventSumLR;
@@ -208,18 +199,34 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
       }
       int lr = it->second[0];
       int actualMod = it->second[1];
-      int geom = moduleToGeom[actualMod];
-      auto key = std::make_pair(geom, lr);
-      int start = waveform_idx->at(j);
-      int end =
-          (j + 1 < nCh ? waveform_idx->at(j + 1) : waveform_total->size());
-      double sum = 0;
-      for (int k = start; k < end; ++k)
-        sum += waveform_total->at(k);
-      // only integrate if total ADC exceeds threshold
-      if (sum < adcThreshold)
-        continue;
-      eventSumLR[key] += sum;
+      int geomID = actualMod; // For old mapping, actualMod is already the GeomID
+      int col = it->second[2];
+      int layer = it->second[3];
+
+      // 새로운 mapping 방식 사용
+      geomID = layer * 8 + col + 1;
+
+      // targetLayer에 해당하는 층만 처리
+      if (layer == targetLayer) {
+        auto key = std::make_pair(geomID, lr);
+        if (j >= waveform_idx->size()) {
+          cout << "Warning: channel index " << j << " out of range for waveform_idx (size=" << waveform_idx->size() << ")" << endl;
+          continue;
+        }
+        int start = waveform_idx->at(j) + 100;
+        int end = waveform_idx->at(j) + 200;
+        double sum = 0;
+        // ADC/TDC가 번갈아 들어있으므로 짝수 bin만 읽기 (ADC만)
+        for (int k = start; k < end; k += 2) {
+          if (k >= 0 && k < waveform_total->size()) {
+            sum += waveform_total->at(k);
+          }
+        }
+        // only integrate if total ADC exceeds threshold
+        if (sum < adcThreshold)
+          continue;
+        eventSumLR[key] += sum;
+      }
     }
     // After summing, fill histograms and accumulate sums/counts
     for (auto &p : eventSumLR) {
@@ -240,36 +247,43 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     cerr << "Error: cannot open sim file " << simFile << endl;
     return;
   }
+  
   map<int, double> sum_sim;
   map<int, long> count_sim;
-  // Process simulation by GeomID 1–24 directly
-  for (int geom = 1; geom <= 24; ++geom) {
+  
+  // Process simulation by GeomID 17-24 (layer 2, col 0-7) for calibration (using Edep)
+  // Always use layer 2 (3rd layer) for simulation comparison regardless of targetLayer
+  int simLayer = 2; // Always use layer 2 (3rd layer) for simulation
+  cout << "\n=== Loading simulation data for layer " << simLayer << " (GeomID " << (simLayer*8+1) << "-" << (simLayer*8+8) << ") ===" << endl;
+  for (int col = 0; col < 8; ++col) {
+    int geom = simLayer * 8 + col + 1; // GeomID 17-24 for layer 2 (3rd layer)
     TH1 *hOrig = (TH1*)fSim->Get(Form("Edep_M%d", geom));
     if (!hOrig) {
       cout << "Warning: sim hist Edep_M" << geom << " missing" << endl;
       continue;
     }
-    // Clone entire sim histogram for QA overlay
-    TH1D *hCloned = (TH1D*)hOrig->Clone(Form("hSim_G%d", geom));
-    // hCloned->Scale(0.5); // Remove 0.5 scaling - use full module energy
-    hCloned->SetDirectory(0);
-    hSimDist[geom] = hCloned;
-    // Store mean value for calibration calculation
+    // Store mean value for calibration calculation (using Edep)
     double meanVal = hOrig->GetMean(); // Use full module energy, no 0.5 scaling
     sum_sim[geom] = meanVal;
     count_sim[geom] = 1;
+    cout << "Loaded sim GeomID " << geom << ": mean = " << meanVal << " MeV" << endl;
+  }
+  
+  // Load simulation Edep histograms for QA plotting (always layer 2)
+  map<int, TH1D*> hSimEdep; // For QA plotting with Edep
+  for (int col = 0; col < 8; ++col) {
+    int geom = simLayer * 8 + col + 1; // GeomID 17-24 for layer 2 (3rd layer)
+    TH1 *hEdep = (TH1*)fSim->Get(Form("Edep_M%d", geom));
+    if (hEdep) {
+      TH1D *hCloned = (TH1D*)hEdep->Clone(Form("hSimEdep_G%d", geom));
+      hCloned->SetDirectory(0);
+      hSimEdep[geom] = hCloned;
+      cout << "Loaded Edep histogram for GeomID " << geom << endl;
+    } else {
+      cout << "Warning: no Edep histogram found for GeomID " << geom << endl;
+    }
   }
   fSim->Close();
-
-  // --- POST-SIM DEBUG INFO ---
-  cout << "Post-simulation histogram summary:" << endl;
-  for (auto &kv : hSimDist) {
-    int geom = kv.first;
-    TH1D *h = kv.second;
-    cout << Form("  GeomID %2d: hist=%p, entries=%lld, integral=%.0f", geom,
-                 (void *)h, h->GetEntries(), h->Integral())
-         << endl;
-  }
 
   // Map (GeomID,LR) → actual module number for labeling
   unordered_map<pair<int,int>, int, pair_hash> geomLRToMod;
@@ -290,9 +304,9 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   tCalib->Branch("CalibConst", &calibValue, "CalibConst/D");
 
   string runTag = extractRunTag(dataFile);
-  string outTxt  = "calibration_constant_output/calibration_constants_" + runTag + ".txt";
-  string outRoot = "calibration_constant_output/calibration_bic_output_" + runTag + ".root";
-  string outQA   = "calibration_constant_output/calibration_QA_" + runTag + ".png";
+  string outTxt  = "calibration_constant_output/calibration_constants_" + runTag + "_layer" + to_string(targetLayer) + ".txt";
+  string outRoot = "calibration_constant_output/calibration_bic_output_" + runTag + "_layer" + to_string(targetLayer) + ".root";
+  string outQA   = "calibration_constant_output/calibration_QA_" + runTag + "_layer" + to_string(targetLayer) + ".png";
 
   std::ofstream csvOut(outTxt);
   csvOut << "#GeomID,Side,CalibConst\n";
@@ -305,20 +319,26 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     int geom = key.first;
     int lr   = key.second;
     
+    // Calculate col position for data GeomID
+    int dataLayer = (geom - 1) / 8;  // 0, 1, 2, or 3
+    int dataCol = (geom - 1) % 8;    // 0, 1, 2, ..., 7
+    
+    // Find corresponding simulation GeomID (same col, layer 2)
+    int simLayer = 2; // Always use layer 2 (3rd layer) for simulation
+    int simGeom = simLayer * 8 + dataCol + 1; // Same col position
+    
     // Simple mean calculation for calibration constants (no fitting needed)
     double md = sum_dataLR[key] / count_dataLR[key];
-    double ms_full = (sum_sim.count(geom) ? sum_sim[geom] : 0.0);
-    
-    double ms_half = ms_full * 0.5; // Half for individual L/R channels
+    double ms_half = (sum_sim.count(simGeom) ? sum_sim[simGeom] : 0.0) * 0.5;
     // percent of half-beam-energy (for individual L/R channels)
     double pct = (beamEnergyGeV > 0) ? (ms_half / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0;
-    double C  = (md != 0.0 ? (ms_half / md) : 0.0);
+    double C = (md > 0) ? (ms_half / md) : 0.0;
     // Determine actual module label
     int mod = geomLRToMod[{geom, lr}];
     char side = (lr ? 'R' : 'L');
     string label = Form("M%d%c", mod, side);
-    printf("  %2d     %-6s  %10.3f  %10.3f (%.1f%%)  %8.5f\n",
-           geom, label.c_str(), md, ms_half, pct, C);
+    printf("  %2d     %-6s  %10.3f  %10.3f (%.1f%%)  %8.5f (simGeom=%d)\n",
+           geom, label.c_str(), md, ms_half, pct, C, simGeom);
     calibGeom  = geom;
     calibSide  = lr;
     calibValue = C;
@@ -328,7 +348,7 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
 
   // --- total simulation energy deposit summary ---
   double totalSimE = 0.0;
-  for (int geom = 1; geom <= 24; ++geom) {
+  for (int geom = 1; geom <= 32; ++geom) {
     auto it = sum_sim.find(geom);
     if (it != sum_sim.end()) {
       totalSimE += it->second;
@@ -343,7 +363,6 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
          totalSimE, totalPct, beamEnergyGeV);
 
   // --- Write out distributions ---
-  // Create output directory if it doesn't exist
   system("mkdir -p calibration_constant_output");
   TFile fout(outRoot.c_str(), "RECREATE");
   for (auto &kv : hDataDistLR) {
@@ -360,111 +379,94 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
        << endl;
 
   // --- QA: overlay Data vs Sim vs Calibration constant per module ---
-  // Define grid order: rows are geom 17-24, 9-16, 1-8, for all 24 modules
-  vector<int> qaOrder = {17, 18, 19, 20, 21, 22, 23, 24, 9, 10, 11, 12,
-                         13, 14, 15, 16, 1,  2,  3,  4,  5, 6,  7,  8};
-  // For each geom, draw L and R overlays in one pad per module
-  TCanvas *cQA = new TCanvas("cQA", "Calibration QA per Module", 2000, 700);
-  cQA->Divide(8, 3); // 8 columns, 3 rows for 24 modules
-  // Draw per-module summary: Data L, Data R, Sim mean, CalibConst L/R
-  // QA 플롯 그리기 전에, 모든 데이터 히스토그램의 최대 bin 값 찾기
-  double globalMax = 0;
-  for (auto &kv : hDataDistLR) {
-    double m = kv.second->GetMaximum();
-    if (m > globalMax) globalMax = m;
-  }
-  // (시뮬레이션도 같이 그릴 거면 아래도 포함)
-  // for (auto &kv : hSimDist) {
-  //   double m = kv.second->GetMaximum();
-  //   if (m > globalMax) globalMax = m;
-  // }
-  // 모든 데이터 히스토그램을 이벤트 수로 정규화
-  for (auto &kv : hDataDistLR) {
-    if (kv.second->GetEntries() > 0)
-      kv.second->Scale(1.0 / kv.second->GetEntries());
-  }
-  // (시뮬레이션도 동일하게)
-  for (auto &kv : hSimDist) {
-    if (kv.second->GetEntries() > 0)
-      kv.second->Scale(1.0 / kv.second->GetEntries());
-  }
-
-  // 2. 정규화된 히스토그램의 최대값(globalMax) 재계산
-  globalMax = 0;
-  for (auto &kv : hDataDistLR) {
-    double m = kv.second->GetMaximum();
-    if (m > globalMax) globalMax = m;
-  }
-  // (시뮬레이션도 포함하려면 아래도)
-  // for (auto &kv : hSimDist) {
-  //   double m = kv.second->GetMaximum();
-  //   if (m > globalMax) globalMax = m;
-  // }
-
-  // 3. y축 최대값 고정
-  for (size_t idx = 0; idx < qaOrder.size(); ++idx) {
-    int geom = qaOrder[idx];
-    cQA->cd(idx + 1);
-    auto keyL = make_pair(geom, 0);
-    auto keyR = make_pair(geom, 1);
-
-    if (hDataDistLR.count(keyL)) hDataDistLR[keyL]->SetMaximum(globalMax * 1.1);
-    if (hDataDistLR.count(keyR)) hDataDistLR[keyR]->SetMaximum(globalMax * 1.1);
-
-    // Draw data L
-    if (hDataDistLR.count(keyL)) {
-      hDataDistLR[keyL]->SetLineColor(kBlue);
-      // hDataDistLR[keyL]->GetXaxis()->SetRangeUser(0,200);
-      hDataDistLR[keyL]->Draw();
+  // Build dynamic grid order based on available GeomIDs
+  vector<int> qaOrder;
+  for (int layer = 0; layer < 4; ++layer) {
+    for (int col = 0; col < 8; ++col) {
+      int geom = layer * 8 + col + 1;
+      qaOrder.push_back(geom);
     }
-    // Draw data R
-    if (hDataDistLR.count(keyR)) {
-      hDataDistLR[keyR]->SetLineColor(kGreen+2);
-      // hDataDistLR[keyR]->GetXaxis()->SetRangeUser(0,200);
-      hDataDistLR[keyR]->Draw("SAME");
+  }
+  int nCols = 8;
+  int nRows = 4;
+  TCanvas *cQA = new TCanvas("cQA", "Calibration QA per Module", 2000, 900);
+  cQA->Divide(nCols, nRows);
+  for (int layer = 0; layer < 4; ++layer) {
+    for (int col = 0; col < 8; ++col) {
+      int geom = layer * 8 + col + 1;
+      int pad = (3 - layer) * 8 + (col + 1);
+      cQA->cd(pad);
+      
+      // targetLayer에 해당하는 층만 데이터 표시
+      if (layer == targetLayer) {
+        auto keyL = make_pair(geom, 0);
+        auto keyR = make_pair(geom, 1);
+        try {
+          if (hDataDistLR.count(keyL)) {
+            hDataDistLR[keyL]->SetLineColor(kBlue);
+            hDataDistLR[keyL]->Draw();
+          }
+          if (hDataDistLR.count(keyR)) {
+            hDataDistLR[keyR]->SetLineColor(kGreen+2);
+            hDataDistLR[keyR]->Draw("SAME");
+          }
+          // Don't draw sim Edep histogram (scaling issues), just use for text annotation
+          // Compute simple means and calibration constants
+          double meanL = (count_dataLR[keyL]>0 ? sum_dataLR[keyL]/count_dataLR[keyL] : 0);
+          double meanR = (count_dataLR[keyR]>0 ? sum_dataLR[keyR]/count_dataLR[keyR] : 0);
+          
+          // Find corresponding simulation GeomID (same col, layer 2)
+          int dataLayer = (geom - 1) / 8;  // 0, 1, 2, or 3
+          int dataCol = (geom - 1) % 8;    // 0, 1, 2, ..., 7
+          int simLayer = 2; // Always use layer 2 (3rd layer) for simulation
+          int simGeom = simLayer * 8 + dataCol + 1; // Same col position
+          
+          double meanS_full = (count_sim.count(simGeom) ? sum_sim[simGeom]/count_sim[simGeom] : 0);
+          double meanS_half = meanS_full * 0.5; // Half for individual L/R channels
+          double CL = (meanL!=0 ? meanS_half/meanL : 0);
+          double CR = (meanR!=0 ? meanS_half/meanR : 0);
+          // Compute standard deviations for L, R, Sim
+          double stdL = 0.0, stdR = 0.0, stdS = 0.0;
+          if (hDataDistLR.count(keyL)) stdL = hDataDistLR[keyL]->GetMeanError();
+          if (hDataDistLR.count(keyR)) stdR = hDataDistLR[keyR]->GetMeanError();
+          if (hSimEdep.count(simGeom))   stdS = hSimEdep[simGeom]->GetMeanError(); // Use Edep for QA
+          // Annotate
+          TLatex tex;
+          tex.SetNDC();
+          tex.SetTextSize(0.06);
+          // Show both GeomID and module label
+          int mod = -1;
+          char sideChar = '?';
+          // Prefer L if available, else R
+          if (geomLRToMod.count({geom,0})) { mod = geomLRToMod[{geom,0}]; sideChar='L'; }
+          else if (geomLRToMod.count({geom,1})) { mod = geomLRToMod[{geom,1}]; sideChar='R'; }
+          tex.SetTextColor(kBlack);
+          tex.DrawLatex(0.15, 0.85, Form("Geom %d (%s)", geom, Form("M%d", mod)));
+          // Data mean ± stddev
+          tex.SetTextColor(kBlue);
+          tex.DrawLatex(0.15, 0.75, Form("µ_L=%.2g #pm %.2g", meanL, stdL));
+          tex.SetTextColor(kGreen+2);
+          tex.DrawLatex(0.15, 0.68, Form("µ_R=%.2g #pm %.2g", meanR, stdR));
+          // Sim mean ± stddev and percentage of half-beam-energy
+          tex.SetTextColor(kRed);
+          double pctS = (beamEnergyGeV > 0) ? (meanS_half / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0; // Half for individual L/R
+          tex.DrawLatex(0.15, 0.60,
+            Form("µ_Edep=%.2g #pm %.2g MeV (%.2g%%)", meanS_half, stdS, pctS));
+          // Calibration constants
+          tex.SetTextColor(kBlack);
+          tex.DrawLatex(0.15, 0.44, Form("C_L=%.2f, C_R=%.2f", CL, CR));
+        } catch (const std::exception& e) {
+          cout << "Error plotting GeomID " << geom << ": " << e.what() << endl;
+        }
+      } else {
+        // 다른 층은 빈 pad로 표시
+        TLatex tex;
+        tex.SetNDC();
+        tex.SetTextSize(0.08);
+        tex.SetTextColor(kGray);
+        tex.DrawLatex(0.5, 0.5, Form("Layer %d", layer));
+      }
     }
-    // // Draw sim
-    // if (hSimDist.count(geom)) {
-    //   hSimDist[geom]->SetLineColor(kRed);
-    //   hSimDist[geom]->Draw("SAME");
-    // }
-    // Compute simple means and calibration constants
-    double meanL = (count_dataLR[keyL]>0 ? sum_dataLR[keyL]/count_dataLR[keyL] : 0);
-    double meanR = (count_dataLR[keyR]>0 ? sum_dataLR[keyR]/count_dataLR[keyR] : 0);
-    double meanS_full = (count_sim[geom]>0 ? sum_sim[geom]/count_sim[geom] : 0);
-    double meanS_half = meanS_full * 0.5; // Half for individual L/R channels
-    double CL = (meanL!=0 ? meanS_half/meanL : 0);
-    double CR = (meanR!=0 ? meanS_half/meanR : 0);
-    // Compute standard deviations for L, R, Sim
-    double stdL = 0.0, stdR = 0.0, stdS = 0.0;
-    if (hDataDistLR.count(keyL)) stdL = hDataDistLR[keyL]->GetMeanError();
-    if (hDataDistLR.count(keyR)) stdR = hDataDistLR[keyR]->GetMeanError();
-    if (hSimDist.count(geom))   stdS = hSimDist[geom]->GetMeanError(); // Remove 0.5 scaling
-    // Annotate
-    TLatex tex;
-    tex.SetNDC();
-    tex.SetTextSize(0.06);
-    // Show both GeomID and module label
-    int mod = -1;
-    char sideChar = '?';
-    // Prefer L if available, else R
-    if (geomLRToMod.count({geom,0})) { mod = geomLRToMod[{geom,0}]; sideChar='L'; }
-    else if (geomLRToMod.count({geom,1})) { mod = geomLRToMod[{geom,1}]; sideChar='R'; }
-    tex.SetTextColor(kBlack);
-    tex.DrawLatex(0.15, 0.85, Form("Geom %d (%s)", geom, Form("M%d", mod)));
-    // Data mean ± stddev
-    tex.SetTextColor(kBlue);
-    tex.DrawLatex(0.15, 0.75, Form("µ_L=%.2g #pm %.2g", meanL, stdL));
-    tex.SetTextColor(kGreen+2);
-    tex.DrawLatex(0.15, 0.68, Form("µ_R=%.2g #pm %.2g", meanR, stdR));
-    // Sim mean ± stddev and percentage of half-beam-energy
-    tex.SetTextColor(kRed);
-    double pctS = (beamEnergyGeV > 0) ? (meanS_half / (beamEnergyGeV * 1000.0 * 0.5) * 100.0) : 0.0; // Half for individual L/R
-    tex.DrawLatex(0.15, 0.60,
-      Form("µ_Sim=%.2g #pm %.2g MeV (%.2g%%)", meanS_half, stdS, pctS));
-    // Calibration constants
-    tex.SetTextColor(kBlack);
-    tex.DrawLatex(0.15, 0.52, Form("C_L=%.2f, C_R=%.2f", CL, CR));
   }
   cQA->SaveAs(outQA.c_str());
   // also write canvas into the output root file

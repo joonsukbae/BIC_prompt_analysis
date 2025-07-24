@@ -24,19 +24,6 @@
 #include <cstdio>
 #include <cmath>
 
-// Energy resolution function: σ(E)/E = √(a²/E + b²)
-double energyResolution(double E, double a, double b) {
-  return sqrt(a*a/E + b*b);
-}
-
-// Fit function for energy resolution
-double resolutionFit(double* x, double* par) {
-  double E = x[0];
-  double a = par[0]; // stochastic term
-  double b = par[1]; // constant term
-  return energyResolution(E, a, b);
-}
-
 // Extract run tag from filename
 const char* extractRunTag(const char* dataFile) {
   static char buf[128];
@@ -557,107 +544,14 @@ int energy_calibration_bic(
   double dataMean = hTotalData->GetMean();
   double dataSigma = hTotalData->GetStdDev();
   
-  // Calculate resolution using σ(E)/E = √(a²/E + b²) formula
+  // Calculate simple resolution: σ(E)/E
   double dataResolution = (dataMean > 0) ? (dataSigma / dataMean) * 100.0 : 0.0;
   
-  // Fit energy resolution curve for data
-  std::vector<double> energies;
-  std::vector<double> resolutions;
-  std::vector<double> energyErrors;
-  std::vector<double> resolutionErrors;
-  
-  // Calculate beam energy in MeV
-  double beamEnergyMeV = beamEnergy * 1000.0;
-  double fitMinEnergy = beamEnergyMeV * 0.7; // -30%
-  double fitMaxEnergy = beamEnergyMeV * 1.3; // +30%
-  
-  // Collect data points from each GeomID (within ±30% of beam energy)
-  for (int col = 0; col < 8; ++col) {
-    int g = targetLayer * 8 + col + 1;
-    if (hCal[g] && hCal[g]->GetEntries() > 10) {
-      double mean = hCal[g]->GetMean();
-      double sigma = hCal[g]->GetStdDev();
-      if (mean > 0 && mean >= fitMinEnergy && mean <= fitMaxEnergy) {
-        double resolution = (sigma / mean) * 100.0;
-        energies.push_back(mean);
-        resolutions.push_back(resolution);
-        energyErrors.push_back(hCal[g]->GetMeanError());
-        resolutionErrors.push_back(hCal[g]->GetStdDevError() / mean * 100.0);
-      }
-    }
-  }
-  
-  // Fit energy resolution curve
-  double a = 0.0, b = 0.0, aErr = 0.0, bErr = 0.0;
-  if (energies.size() > 2) {
-    TGraphErrors* grRes = new TGraphErrors(energies.size());
-    for (size_t i = 0; i < energies.size(); ++i) {
-      grRes->SetPoint(i, energies[i], resolutions[i]);
-      grRes->SetPointError(i, energyErrors[i], resolutionErrors[i]);
-    }
-    
-    // Estimate beam energy from data
-    double maxEnergy = *std::max_element(energies.begin(), energies.end());
-    double beamEnergyGeV = maxEnergy / 1000.0; // Convert MeV to GeV
-    
-    // For limited data points, use a simpler approach
-    if (energies.size() >= 3) {
-      // Print data points for debugging
-      std::cout << "\n=== Energy Resolution Data Points (Beam Energy ±30%) ===" << std::endl;
-      std::cout << "Fit range: " << fitMinEnergy << " to " << fitMaxEnergy << " MeV" << std::endl;
-      for (size_t i = 0; i < energies.size(); ++i) {
-        std::cout << "E = " << energies[i] << " MeV, σ/E = " << resolutions[i] << "%" << std::endl;
-      }
-      
-      // Check if we have enough energy range for meaningful fitting
-      double minEnergy = *std::min_element(energies.begin(), energies.end());
-      double maxEnergy = *std::max_element(energies.begin(), energies.end());
-      double energyRange = maxEnergy / minEnergy;
-      
-      // Simple estimation from data points instead of problematic fitting
-      std::cout << "\n=== Energy Resolution Estimation ===" << std::endl;
-      std::cout << "Energy range: " << minEnergy << " to " << maxEnergy << " MeV (ratio = " << energyRange << ")" << std::endl;
-      std::cout << "Data points: " << energies.size() << std::endl;
-      
-      // Calculate average resolution and energy
-      double avgResolution = 0.0;
-      double avgEnergy = 0.0;
-      for (size_t i = 0; i < resolutions.size(); ++i) {
-        avgResolution += resolutions[i];
-        avgEnergy += energies[i];
-      }
-      avgResolution /= resolutions.size();
-      avgEnergy /= energies.size();
-      
-      // Simple estimation: assume b = 20% of average resolution, a from remaining
-      b = avgResolution * 0.2; // 20% constant term
-      a = sqrt((avgResolution * avgResolution - b * b) * avgEnergy / 1000.0); // Convert to GeV
-      
-      std::cout << "Average resolution: " << avgResolution << "% at " << avgEnergy << " MeV" << std::endl;
-      std::cout << "Estimated a (stochastic) = " << a << "%" << std::endl;
-      std::cout << "Estimated b (constant) = " << b << "%" << std::endl;
-      
-      aErr = 0.0; // No error estimation for simple method
-      bErr = 0.0;
-    } else {
-      // If not enough data points, we'll estimate later from total energy distribution
-      a = 0.0;
-      b = 0.0;
-      aErr = 0.0;
-      bErr = 0.0;
-    }
-    
-    // Calculate resolution at beam energy
-    double resolutionAtBeam = energyResolution(beamEnergyGeV * 1000.0, a, b);
-    
-    std::cout << "\n=== Energy Resolution Analysis ===" << std::endl;
-    std::cout << "σ(E)/E = √(a²/E + b²)" << std::endl;
-    std::cout << "a (stochastic term) = " << a << " ± " << aErr << "%" << std::endl;
-    std::cout << "b (constant term) = " << b << " ± " << bErr << "%" << std::endl;
-    std::cout << "Resolution at " << beamEnergyGeV << " GeV: " << resolutionAtBeam << "%" << std::endl;
-    
-    delete grRes;
-  }
+  // Print simple statistics
+  std::cout << "\n=== Total Energy Statistics ===" << std::endl;
+  std::cout << "Mean energy: " << dataMean << " MeV" << std::endl;
+  std::cout << "Sigma: " << dataSigma << " MeV" << std::endl;
+  std::cout << "Resolution σ(E)/E: " << dataResolution << "%" << std::endl;
   
   // Create text display (calibrated data only)
   TLatex tex;
@@ -665,14 +559,7 @@ int energy_calibration_bic(
   tex.SetTextSize(0.04);
   tex.DrawLatex(0.1, 0.9, Form("Calibrated Data: Mean = %.1f MeV", dataMean));
   tex.DrawLatex(0.1, 0.8, Form("Calibrated Data: #sigma = %.1f MeV", dataSigma));
-  tex.DrawLatex(0.1, 0.7, Form("Energy Resolution: %.1f%%", dataResolution));
-  
-  // Add energy resolution fit results
-  if (energies.size() > 2) {
-    tex.DrawLatex(0.1, 0.6, Form("a (stochastic) = %.1f%%", a));
-    tex.DrawLatex(0.1, 0.5, Form("b (constant) = %.1f%%", b));
-    tex.DrawLatex(0.1, 0.4, Form("#sigma(E)/E = #sqrt{(%.1f)^{2}/E + (%.1f)^{2}}", a, b));
-  }
+  tex.DrawLatex(0.1, 0.7, Form("Resolution #sigma(E)/E = %.1f%%", dataResolution));
   
   cTotal->SaveAs(Form("energy_calibration_output/total_energy_comparison_%s.png", runTag));
 
@@ -757,51 +644,15 @@ int energy_calibration_bic(
             << hTotal->GetMean() << " MeV, sigma = "
             << hTotal->GetStdDev() << " MeV\n";
   
-  // Fit total energy distribution for energy resolution using high-energy physics formula
-  std::cout << "\n=== Total Energy Distribution Fitting ===" << std::endl;
+  // Print simple total energy statistics
+  std::cout << "\n=== Total Energy Statistics ===" << std::endl;
   if (hTotal->GetEntries() > 10) {
-    TF1* fTotal = new TF1("fTotal", "gaus", hTotal->GetXaxis()->GetXmin(), hTotal->GetXaxis()->GetXmax());
-    fTotal->SetParameters(hTotal->GetMaximum(), hTotal->GetMean(), hTotal->GetStdDev());
-    hTotal->Fit(fTotal, "Q");
-    double meanTotal_fit = fTotal->GetParameter(1);
-    double sigmaTotal_fit = fTotal->GetParameter(2);
+    double meanTotal = hTotal->GetMean();
+    double sigmaTotal = hTotal->GetStdDev();
+    double resolutionTotal = (meanTotal > 0) ? (sigmaTotal / meanTotal) * 100.0 : 0.0;
     
-    // Calculate resolution using high-energy physics formula
-    double resolutionTotal = (meanTotal_fit > 0) ? (sigmaTotal_fit / meanTotal_fit) * 100.0 : 0.0;
-    
-    // Estimate stochastic and constant terms from total energy
-    double E_total = meanTotal_fit; // in MeV
-    double sigma_total = sigmaTotal_fit; // in MeV
-    double resolution_total = resolutionTotal; // in %
-    
-    // Calculate energy resolution using fitted parameters
-    double fittedResolution = 0.0;
-    std::cout << "\n=== Total Energy Resolution Analysis ===" << std::endl;
-    std::cout << "Total energy: mean = " << meanTotal_fit << " MeV, sigma = " << sigmaTotal_fit << " MeV\n";
-    std::cout << "Raw energy resolution: " << resolutionTotal << "%\n";
-    
-    if (energies.size() > 2 && a > 0) {
-      // Use fitted resolution formula from individual modules
-      fittedResolution = energyResolution(E_total, a, b);
-      std::cout << "Using fitted parameters from individual modules:" << std::endl;
-      std::cout << "a (stochastic term) = " << a << " ± " << aErr << "%\n";
-      std::cout << "b (constant term) = " << b << " ± " << bErr << "%\n";
-      std::cout << "Fitted energy resolution at " << E_total << " MeV: " << fittedResolution << "%\n";
-      std::cout << "σ(E)/E = √(a²/E + b²) = √((" << a << "%)²/E + (" << b << "%)²)\n";
-    } else {
-      // Estimate from total energy resolution only
-      std::cout << "No valid fitting from individual modules, estimating from total energy:" << std::endl;
-      double a_est = resolutionTotal * sqrt(E_total / 1000.0); // Convert to GeV
-      double b_est = resolutionTotal * 0.2; // Assume 20% is constant term
-      fittedResolution = energyResolution(E_total, a_est, b_est);
-      
-      std::cout << "Estimated a (stochastic term) ≈ " << a_est << "%\n";
-      std::cout << "Estimated b (constant term) ≈ " << b_est << "%\n";
-      std::cout << "Estimated energy resolution at " << E_total << " MeV: " << fittedResolution << "%\n";
-      std::cout << "σ(E)/E = √(a²/E + b²) ≈ √((" << a_est << "%)²/E + (" << b_est << "%)²)\n";
-    }
-    
-    delete fTotal;
+    std::cout << "Total energy: mean = " << meanTotal << " MeV, sigma = " << sigmaTotal << " MeV\n";
+    std::cout << "Energy resolution σ(E)/E: " << resolutionTotal << "%\n";
   }
   
   return 0;

@@ -10,19 +10,13 @@
 # Allow .gitignore itself
 !.gitignore
 
-# Allow output directories (folders only)
+# Allow .gitkeep files for empty directories
+!.gitkeep
+
+# Allow output directories (folders only, no files inside)
 !intADC_QA_output/
 !calibration_constant_output/
 !energy_calibration_output/
-
-# Allow PNG files in output directories
-!intADC_QA_output/*.png
-!calibration_constant_output/*.png
-!energy_calibration_output/*.png
-
-# Allow Sim and Data directories (folders only)
-!Sim/
-!Data/
 
 # Ignore all other files and directories
 .DS_Store
@@ -32,3 +26,4 @@
 # Ignore specific file types (after allowing directories)
 *.root
 *.txt
+*.png

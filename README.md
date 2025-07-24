@@ -34,4 +34,3 @@ Output: `energy_calibration_output/energy_calibration_QC_RunXXXXX_layerX.root`
 - `calibration_bic.C`: calibration constants
 - `caloMap.h`: channel mapping
 - `energy_calibration_bic.C`: energy calibration
-- `README.md`: this file

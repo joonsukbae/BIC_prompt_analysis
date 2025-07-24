@@ -1,11 +1,11 @@
 // calibration_bic.C
 // Macro: calculate calibration constants by comparing data with simulation
 // Usage:
-//   root -l -q 'calibration_bic.C("Data/Run_60264_Waveform.root", "Sim/4x8_5GeV_3rd_result_new.root", 3.0, 2)'
+//   root -l -q 'calibration_bic.C("Data/Run_60264_Waveform.root", "Sim/3x8_3GeV_CERN_hist.root", 3.0, 1)'
 
 #include "TIterator.h"
 #include "TKey.h"
-#include "caloMap_old.h"
+#include "caloMap.h"
 #include <TFile.h>
 #include <TH1.h>
 #include <TH1D.h>
@@ -69,9 +69,9 @@ const char* extractRunTag(const char* dataFile) {
 }
 
 void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
-                     const char *simFile = "Sim/4x8_5GeV_3rd_result_new.root",
+                     const char *simFile = "Sim/3x8_3GeV_CERN_hist.root",
                      const double beamEnergyGeV = 3.0,
-                     int targetLayer = 2,
+                     int targetLayer = 1,
                      int adcThreshold = 0,
                      bool useTriggerTime = true,
                      bool useTriggerNumber = false,
@@ -125,7 +125,7 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   std::map<int, TH1D*> hSimDist; // sim remains per geom
   
   // Data mapping from caloMap_old.h
-  auto dataChMap = GetCaloChMapOld();
+  auto dataChMap = GetCaloChMap();
   cout << "Loaded " << dataChMap.size() << " channel-to-geom entries from caloMap.h" << endl;
   
   // Build module → GeomID and module labels dynamically
@@ -251,12 +251,12 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
   map<int, double> sum_sim;
   map<int, long> count_sim;
   
-  // Process simulation by GeomID 17-24 (layer 2, col 0-7) for calibration (using Edep)
-  // Always use layer 2 (3rd layer) for simulation comparison regardless of targetLayer
-  int simLayer = 2; // Always use layer 2 (3rd layer) for simulation
+  // Process simulation by GeomID 9-16 (layer 1, col 0-7) for calibration (using Edep)
+  // Always use layer 1 (2nd layer, middle layer) for simulation comparison regardless of targetLayer
+  int simLayer = 1; // Always use layer 1 (2nd layer, middle layer) for simulation
   cout << "\n=== Loading simulation data for layer " << simLayer << " (GeomID " << (simLayer*8+1) << "-" << (simLayer*8+8) << ") ===" << endl;
   for (int col = 0; col < 8; ++col) {
-    int geom = simLayer * 8 + col + 1; // GeomID 17-24 for layer 2 (3rd layer)
+    int geom = simLayer * 8 + col + 1; // GeomID 9-16 for layer 1 (2nd layer, middle layer)
     TH1 *hOrig = (TH1*)fSim->Get(Form("Edep_M%d", geom));
     if (!hOrig) {
       cout << "Warning: sim hist Edep_M" << geom << " missing" << endl;
@@ -269,10 +269,10 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     cout << "Loaded sim GeomID " << geom << ": mean = " << meanVal << " MeV" << endl;
   }
   
-  // Load simulation Edep histograms for QA plotting (always layer 2)
+  // Load simulation Edep histograms for QA plotting (always layer 1)
   map<int, TH1D*> hSimEdep; // For QA plotting with Edep
   for (int col = 0; col < 8; ++col) {
-    int geom = simLayer * 8 + col + 1; // GeomID 17-24 for layer 2 (3rd layer)
+    int geom = simLayer * 8 + col + 1; // GeomID 9-16 for layer 1 (2nd layer, middle layer)
     TH1 *hEdep = (TH1*)fSim->Get(Form("Edep_M%d", geom));
     if (hEdep) {
       TH1D *hCloned = (TH1D*)hEdep->Clone(Form("hSimEdep_G%d", geom));
@@ -323,8 +323,8 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
     int dataLayer = (geom - 1) / 8;  // 0, 1, 2, or 3
     int dataCol = (geom - 1) % 8;    // 0, 1, 2, ..., 7
     
-    // Find corresponding simulation GeomID (same col, layer 2)
-    int simLayer = 2; // Always use layer 2 (3rd layer) for simulation
+    // Find corresponding simulation GeomID (same col, layer 1)
+    int simLayer = 1; // Always use layer 1 (2nd layer, middle layer) for simulation
     int simGeom = simLayer * 8 + dataCol + 1; // Same col position
     
     // Simple mean calculation for calibration constants (no fitting needed)
@@ -415,10 +415,10 @@ void calibration_bic(const char *dataFile = "Data/Waveform_sample.root",
           double meanL = (count_dataLR[keyL]>0 ? sum_dataLR[keyL]/count_dataLR[keyL] : 0);
           double meanR = (count_dataLR[keyR]>0 ? sum_dataLR[keyR]/count_dataLR[keyR] : 0);
           
-          // Find corresponding simulation GeomID (same col, layer 2)
+          // Find corresponding simulation GeomID (same col, layer 1)
           int dataLayer = (geom - 1) / 8;  // 0, 1, 2, or 3
           int dataCol = (geom - 1) % 8;    // 0, 1, 2, ..., 7
-          int simLayer = 2; // Always use layer 2 (3rd layer) for simulation
+          int simLayer = 1; // Always use layer 1 (2nd layer, middle layer) for simulation
           int simGeom = simLayer * 8 + dataCol + 1; // Same col position
           
           double meanS_full = (count_sim.count(simGeom) ? sum_sim[simGeom]/count_sim[simGeom] : 0);

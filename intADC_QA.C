@@ -1,7 +1,7 @@
 // intADC_QA.C
 // QA macro: plot integrated ADC distributions for each channel
 // Usage:
-//   root -l -q 'intADC_QA.C("Data/Run_60264_Waveform.root", 2)'
+//   root -l -q 'intADC_QA.C("Data/Run_60264_Waveform.root", 1)'
 
 #include <TFile.h>
 #include <TTree.h>
@@ -10,15 +10,31 @@
 #include <TLegend.h>
 #include <vector>
 #include <iostream>
-#include "caloMap_old.h"
+#include <string>
+#include <regex>
+#include "caloMap.h"
 
-void intADC_QA(const char* dataFile = "Data/Waveform_sample.root", int targetLayer = 2) {
+// Extract run tag from filename
+string extractRunTag(const char* filename) {
+  string fname(filename);
+  regex runPattern(R"(Run_(\d+))");
+  smatch match;
+  if (regex_search(fname, match, runPattern)) {
+    return match[1].str();
+  }
+  return "unknown";
+}
+
+void intADC_QA(const char* dataFile = "Data/Waveform_sample.root", int targetLayer = 1) {
   // 1. Open data file
   TFile* f = TFile::Open(dataFile, "READ");
   if (!f || f->IsZombie()) {
     std::cerr << "Error: cannot open file " << dataFile << std::endl;
     return;
   }
+  
+  // Extract run tag for output filename
+  string runTag = extractRunTag(dataFile);
   
   // 2. Auto-detect TTree
   TTree* t = nullptr;
@@ -52,7 +68,7 @@ void intADC_QA(const char* dataFile = "Data/Waveform_sample.root", int targetLay
   t->SetBranchAddress("data_length", &data_length);
 
   // 4. Load mapping
-  auto chMap = GetCaloChMapOld();
+  auto chMap = GetCaloChMap();
 
   // 5. Prepare histograms for (geom, lr) pairs
   std::map<std::pair<int,int>, TH1D*> hIntADC; // (geom, lr) → hist
@@ -155,11 +171,11 @@ void intADC_QA(const char* dataFile = "Data/Waveform_sample.root", int targetLay
     }
   }
   
-  // Save canvas
-  c->SaveAs(Form("intADC_QA_layer%d.png", targetLayer));
-  std::cout << "Saved intADC_QA_layer" << targetLayer << ".png" << std::endl;
+  // Create output directory
+  system("mkdir -p intADC_QA_output");
   
-  // Wait for user input before closing
-  std::cout << "Press Enter to continue..." << std::endl;
-  std::cin.get();
+  // Save canvas with run tag and layer info
+  string outFile = "intADC_QA_output/intADC_QA_" + runTag + "_layer" + to_string(targetLayer) + ".png";
+  c->SaveAs(outFile.c_str());
+  std::cout << "Saved " << outFile << std::endl;
 } 

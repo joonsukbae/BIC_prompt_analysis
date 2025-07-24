@@ -1,28 +1,33 @@
 # Ignore all files by default
 *
 
-# Allow C/C++ source files
-!*.C
-!*.h
-
-# Allow README
+# Allow specific C files for PR
+!calibration_bic.C
+!caloMap.h
+!energy_calibration_bic.C
 !README.md
-
-# Allow specific example PNG files (only the ones currently generated)
-!intADC_QA_layer1.png
-!energy_calibration_output/energy_calibration_QC_Run60264.png
-!energy_calibration_output/total_energy_comparison_Run60264.png
-!calibration_constant_output/calibration_QA_Run60264_layer1.png
 
 # Allow .gitignore itself
 !.gitignore
+
+# Allow output directories (folders only)
+!intADC_QA_output/
+!calibration_constant_output/
+!energy_calibration_output/
+
+# Allow PNG files in output directories
+!intADC_QA_output/*.png
+!calibration_constant_output/*.png
+!energy_calibration_output/*.png
+
+# Allow Sim and Data directories (folders only)
+!Sim/
+!Data/
 
 # Ignore all other files and directories
 .DS_Store
 .vscode/
 .git/
-Data/
-Sim/
 *.root
 *.txt
 .DS_Store

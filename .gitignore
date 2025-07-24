@@ -28,6 +28,7 @@
 .DS_Store
 .vscode/
 .git/
+
+# Ignore specific file types (after allowing directories)
 *.root
 *.txt
-.DS_Store

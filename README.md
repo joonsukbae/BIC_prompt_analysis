@@ -4,15 +4,15 @@
 
 ### calibration_bic.C
 ```bash
-root -l -q 'calibration_bic.C("Data/<Data_Waveform.root>", "Sim/3x8_3GeV_CERN_hist.root", <beamEnergyGeV energy>, <targetLayer>)'
+root -l -q 'calibration_bic.C("Data/<Data_RunXXXXX_Waveform.root>", "Sim/3x8_3GeV_CERN_hist.root", <beamEnergyGeV energy>, <targetLayer>)'
 ```
-Output: `calibration_constant_output/calibration_bic_output_Run60264_layer1.root`
+Output: `calibration_constant_output/calibration_bic_output_RunXXXXX_layerX.root`
 
 ### energy_calibration_bic.C
 ```bash
-root -l -q 'energy_calibration_bic.C("Data/Run_60264_Waveform.root", "calibration_constant_output/calibration_bic_output_Run60264_layer1.root", "Sim/3x8_3GeV_CERN_hist.root", "energy_calibration_output/energy_calibration_QC_Run60264_layer1.root", <beamEnergyGeV energy>, <targetLayer>)'
+root -l -q 'energy_calibration_bic.C("Data/<Data_RunXXXXX_Waveform.root>", "calibration_constant_output/calibration_bic_output_RunXXXXX_layerX.root", "Sim/3x8_3GeV_CERN_hist.root", "energy_calibration_output/energy_calibration_QC_RunXXXXX_layerX.root", <beamEnergyGeV energy>, <targetLayer>)'
 ```
-Output: `energy_calibration_output/energy_calibration_QC_Run60264_layer1.root`
+Output: `energy_calibration_output/energy_calibration_QC_RunXXXXX_layerX.root`
 
 ## Parameters
 
